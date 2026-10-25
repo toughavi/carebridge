@@ -52,6 +52,13 @@ const load = async (p) => (await import('../api/' + p + '.js')).default;
 
 beforeEach(() => { calls = []; });
 
+test('the server stays within Vercel free plan limit of 12 functions', async () => {
+  const fs = await import('node:fs'); const path = await import('node:path');
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : [e.name]);
+  const routes = walk(new URL('../api', import.meta.url).pathname).filter((f) => f.endsWith('.js') && !f.startsWith('_'));
+  assert.ok(routes.length <= 12, routes.length + ' functions');
+});
+
 test('health reports every service as set up', async () => {
   const r = res(); await (await load('health'))(req(), r);
   assert.deepEqual(r.json().features, { ai: true, calls: true, sms: true, push: true, kv: true });
@@ -138,6 +145,24 @@ test('weekly visit: the ride home has its own request id, and a NO comes back fo
   assert.equal(r3.json().replies['wk1-2026-10-29'], undefined);
 });
 
+test('voice thank-you: saved, played back from its link, and only real audio is accepted', async () => {
+  const voice = await load('voice');
+  const audio = Buffer.from('fake-opus-audio').toString('base64');
+  const r = res(); await voice(req({ method: 'POST', url: '/api/voice', headers: page, body: { audio, type: 'audio/webm;codecs=opus' } }), r);
+  assert.equal(r.statusCode, 200);
+  const { id, url } = r.json();
+  assert.match(url, /^https:\/\/cb\.test\/api\/voice\?id=/);
+  const g = res(); await voice(req({ url: '/api/voice?id=' + id }), g);
+  assert.equal(g.statusCode, 200); assert.equal(g.headers['content-type'], 'audio/webm');
+  assert.equal(Buffer.from(g.body).toString(), 'fake-opus-audio');
+  const bad = res(); await voice(req({ method: 'POST', url: '/api/voice', headers: page, body: { audio, type: 'text/html' } }), bad);
+  assert.equal(bad.statusCode, 400);
+  const big = res(); await voice(req({ method: 'POST', url: '/api/voice', headers: page, body: { audio: 'A'.repeat(800000), type: 'audio/webm' } }), big);
+  assert.equal(big.statusCode, 413);
+  const missing = res(); await voice(req({ url: '/api/voice?id=nope' }), missing);
+  assert.equal(missing.statusCode, 404);
+});
+
 test('texts to unapproved numbers are refused', async () => {
   const r = res(); await (await load('sms/send'))(req({ method: 'POST', headers: page, body: { to: '+15555550000', body: 'x' } }), r);
   assert.equal(r.statusCode, 403);
@@ -152,10 +177,11 @@ test('yes / no understood in several languages', async () => {
 
 test('push: subscribe, schedule, and the evening job sends what is due', async () => {
   const sub = { endpoint: 'https://push.example/abc', keys: { p256dh: 'x', auth: 'y' } };
-  const r = res(); await (await load('push/subscribe'))(req({ method: 'POST', headers: page, body: { subscription: sub } }), r);
+  const push = await load('push/[action]');
+  const r = res(); await push(req({ method: 'POST', url: '/api/push/subscribe', headers: page, body: { subscription: sub } }), r);
   const id = r.json().id;
   const soon = Date.now() + 3600000, later = Date.now() + 5 * 86400000;
-  const r2 = res(); await (await load('push/schedule'))(req({ method: 'POST', headers: page, body: { id, items: [{ key: 'a', at: soon, title: 'Tomorrow 9:30', body: 'Avi picks you up' }, { key: 'b', at: later, title: 'Later' }] } }), r2);
+  const r2 = res(); await push(req({ method: 'POST', url: '/api/push/schedule', headers: page, body: { id, items: [{ key: 'a', at: soon, title: 'Tomorrow 9:30', body: 'Avi picks you up' }, { key: 'b', at: later, title: 'Later' }] } }), r2);
   assert.equal(r2.json().count, 2);
   const bad = res(); await (await load('cron/reminders'))(req({ url: '/api/cron/reminders' }), bad);
   assert.equal(bad.statusCode, 401);

@@ -65,6 +65,11 @@ function rideLine(st, a, leg = 'to') {
   if (wk && r.status === 'idle') return { kind: 'later', leg, text: pre + t(L, 'askLater', { day: fmtDay(askDate(a).toISOString(), L) }) };
   return null;
 }
+/* What the senior sees when someone says yes, for example "Mini is driving you" or "Avi drops you off". */
+function saidYesText(L, a, leg, name) {
+  if (!a.seriesId) return t(L, 'driving', { name });
+  return t(L, leg === 'back' ? 'bringsYou' : 'dropsYou', { name });
+}
 const rideLines = (st, a) => legsOf(a).map((l) => rideLine(st, a, l)).filter(Boolean);
 /* Short status chip for a visit row: driver names when every ride is covered, otherwise a clock. */
 function RideChip({ st, a }) {
@@ -165,7 +170,7 @@ function StepHosp({ st, update, next, skip }) {
   </div>`;
 }
 
-/* Hospital sign-in. Simulated inside claude.ai; real SMART on FHIR on the app's own website. */
+/* Hospital sign-in. Real SMART on FHIR on the website; simulated demo data otherwise. */
 function StepPortal({ st, update, next, cancel, syncing }) {
   const L = st.profile.lang;
   const [phase, setPhase] = useState(st.hospital && st.hospital.connectedAt ? 'done' : 'login');
@@ -207,7 +212,7 @@ function StepPortal({ st, update, next, cancel, syncing }) {
     <button className="btn btn-primary btn-block" style=${{ marginTop: 'auto' }} onClick=${next}>${t(L, 'continue')}</button>
   </div>`;
 
-  if (REAL_OK) return html`<div className="stack-lg" style=${{ flex: 1 }}>
+  if (ON_WEBSITE) return html`<div className="stack-lg" style=${{ flex: 1 }}>
     <div className="stack"><h1 className="h1">${t(L, 'hospTitle')}</h1><p className="sub">${hosp.name}</p></div>
     <div className="card stack">
       <span className="eyebrow">Real sign-in · SMART on FHIR</span>
@@ -420,7 +425,13 @@ function PastVisits({ st }) {
     </div>
     <div>
       <div className="months" aria-hidden="true">
-        ${months.map((m, i) => { const inM = past.filter((a) => { const d = new Date(a.start); return d.getMonth() === m.getMonth() && d.getFullYear() === m.getFullYear(); }); return html`<div key=${i} className="month"><div className="dots">${inM.map((a) => html`<span key=${a.id} className=${'dot' + (a.ride && a.ride.driverId ? '' : ' grey')} title=${a.doctor}></span>`)}</div><small>${fmtMonthShort(m, L)}</small></div>`; })}
+        ${months.map((m, i) => {
+          const inMonth = past.filter((a) => new Date(a.start).getMonth() === m.getMonth() && new Date(a.start).getFullYear() === m.getFullYear());
+          return html`<div key=${i} className="month">
+            <div className="dots">${inMonth.map((a) => html`<span key=${a.id} className=${a.ride && a.ride.driverId ? 'dot' : 'dot grey'} title=${a.doctor}></span>`)}</div>
+            <small>${fmtMonthShort(m, L)}</small>
+          </div>`;
+        })}
       </div>
     </div>
     <div className="stack" style=${{ gap: 0 }}>
@@ -539,7 +550,12 @@ function Call(props) {
 function saveBooking(update, draft, startIso, extra) {
   const id = uid('cb');
   update((n) => {
-    const a = Object.assign({ id, source: 'carebridge', doctor: draft.doctor, place: draft.place, specialty: draft.specialty, reason: draft.reason, reasonEn: draft.reasonEn, start: startIso, status: 'booked', ride: { status: 'idle', driverId: null, askedId: null, declinedIds: [] }, delayMin: 0, followUp: null }, extra || {});
+    const a = {
+      id, source: 'carebridge', status: 'booked', start: startIso,
+      doctor: draft.doctor, place: draft.place, specialty: draft.specialty, reason: draft.reason, reasonEn: draft.reasonEn,
+      ride: { status: 'idle', driverId: null, askedId: null, declinedIds: [] }, delayMin: 0, followUp: null
+    };
+    Object.assign(a, extra || {});
     n.appts.push(a); n.appts.sort((x, y) => new Date(x.start) - new Date(y.start));
     if (n.people.length) askNext(n, a);
   });
@@ -669,6 +685,13 @@ function Visit({ st, update, go, id, notify, saveFile }) {
   const driver = r && r.driver;
   const backDriver = rb && rb.driver;
   const summary = [fmtLongDay(a.start, L) + ', ' + fmtTime(visitTime(a), L) + '.', (a.seriesId ? a.reason : a.doctor) + (a.place ? ', ' + a.place : '') + '.', ...rs.map((x) => x.text + '.' + (x.sub ? ' ' + x.sub + '.' : '')), a.delayMin ? t(L, 'lateTitle', { n: a.delayMin }) + '.' : ''].join(' ');
+  // Title and subtitle: "Physiotherapy / Every Thursday" for a weekly visit, the doctor for a normal one.
+  let title = today ? t(L, 'today') + ' · ' + a.doctor : t(L, 'visitTitle');
+  let subtitle = today ? '' : a.doctor + ' · ' + t(L, 'sp_' + (a.specialty || 'family'));
+  if (a.seriesId) {
+    title = (today ? t(L, 'today') + ' · ' : '') + a.reason;
+    subtitle = t(L, 'everyDay', { day: fmtWeekdayLong(new Date(a.start).getDay(), L) });
+  }
   const imDone = () => {
     setDoneSent(true);
     update((n) => { const x = n.appts.find((y) => y.id === a.id); if (x) x.doneAt = Date.now(); n.messages.unshift({ id: uid('m'), to: backDriver.id, from: 'senior', text: doneText(st, a), at: Date.now(), apptId: a.id }); });
@@ -684,7 +707,11 @@ function Visit({ st, update, go, id, notify, saveFile }) {
   const smsBody = driver ? 'CareBridge: ' + st.profile.name + ' — ' + a.doctor + ', ' + fmtDay(a.start, 'en') + ' ' + fmtTime(visitTime(a), 'en') + '. Pickup ' + fmtTime(pickupTime(a), 'en') + (a.place ? ' · ' + a.place : '') : '';
   return html`<div className="stack-lg">
     <${TopBar} onBack=${() => go({ name: 'home' })} />
-    <div className="stack"><span className="eyebrow" style=${{ color: 'var(--accent)' }}>${fmtLongDay(a.start, L)}</span><h1 className="h1">${a.seriesId ? (today ? t(L, 'today') + ' · ' : '') + a.reason : today ? t(L, 'today') + ' · ' + a.doctor : t(L, 'visitTitle')}</h1>${a.seriesId ? html`<p className="sub">${t(L, 'everyDay', { day: fmtWeekdayLong(new Date(a.start).getDay(), L) })}</p>` : !today ? html`<p className="sub">${a.doctor} · ${t(L, 'sp_' + (a.specialty || 'family'))}</p>` : null}</div>
+    <div className="stack">
+      <span className="eyebrow" style=${{ color: 'var(--accent)' }}>${fmtLongDay(a.start, L)}</span>
+      <h1 className="h1">${title}</h1>
+      ${subtitle ? html`<p className="sub">${subtitle}</p>` : null}
+    </div>
     ${a.delayMin ? html`<div className="card-grad row" style=${{ alignItems: 'flex-start' }}>
       <span className="check" style=${{ width: 40, height: 40, borderRadius: 20 }}><${Icon} name="clock" /></span>
       <div className="stack" style=${{ gap: 4 }}><b className="h2" style=${{ color: '#fff', fontSize: '1.15rem' }}>${t(L, 'lateTitle', { n: a.delayMin })}</b>${driver ? html`<span>${t(L, 'lateBody', { name: driver.name, time: fmtTime(pickupTime(a), L) })}</span>` : null}</div>
@@ -700,7 +727,8 @@ function Visit({ st, update, go, id, notify, saveFile }) {
       ${rs.filter((x) => x.kind === 'none').map((x) => html`<div key=${'n' + x.leg} className="stack"><span className="status wait">${x.text}</span><${OtherRides} st=${st} update=${update} a=${a} leg=${x.leg} /></div>`)}
       ${!r && st.people.length ? html`<button className="btn btn-soft btn-sm" onClick=${() => update((n) => restartAsking(n, a.id))}>${t(L, 'askAgain')}</button>` : null}
     </div>
-    ${a.seriesId ? (a.phone || (a.prep && a.prep.length) ? html`<div className="card stack">${a.prep && a.prep.length ? html`<span className="eyebrow">${t(L, 'prep')}</span>${a.prep.map((x, i) => html`<span key=${i} className="row small" style=${{ gap: 8 }}><${Icon} name="check" size=${16} />${x}</span>`)}` : null}${a.phone ? html`<span className="muted small">${t(L, 'clinicPhone')}: <span style=${{ userSelect: 'all' }}>${a.phone}</span></span>` : null}</div>` : null) : html`<div className="card stack">
+    ${a.seriesId && a.phone ? html`<div className="card"><span className="muted small">${t(L, 'clinicPhone')}: <span style=${{ userSelect: 'all' }}>${a.phone}</span></span></div>` : null}
+    ${a.seriesId ? null : html`<div className="card stack">
       <span className="eyebrow">${t(L, 'questions')}</span>
       <span>1. ${a.reason}</span><span>2. ${t(L, 'q1')}</span><span>3. ${t(L, 'q2')}</span>
       ${a.prep && a.prep.length ? html`<div className="divider"></div><span className="eyebrow">${t(L, 'prep')}</span>${a.prep.map((x, i) => html`<span key=${i} className="row small" style=${{ gap: 8 }}><${Icon} name="check" size=${16} />${x}</span>`)}` : null}
@@ -782,9 +810,107 @@ function After({ st, update, go, id, notify }) {
       <span className="h2" style=${{ fontSize: '1.25rem' }}>${t(L, 'thankTitle', { name: driver.name })}</span>
       <div className="row" style=${{ justifyContent: 'center' }}>${drivers.map((d) => html`<${Avatar} key=${d.id} name=${d.name} on=${true} size=${72} />`)}</div>
       <button className="btn btn-primary" onClick=${thank} disabled=${sent}>${sent ? t(L, 'thankSent', { name: driver.name }) : '“' + t(L, 'thankMsg') + '”'}</button>
+      <${VoiceThanks} st=${st} update=${update} notify=${notify} drivers=${drivers} apptId=${id} />
     </div>` : null}
     <p className="small muted center row" style=${{ justifyContent: 'center' }}><${Icon} name="people" size=${16} />${t(L, 'familyUpdate')}</p>
     <button className="btn btn-secondary btn-block" onClick=${() => go({ name: 'home' })}>${t(L, 'done')}</button>
+  </div>`;
+}
+
+/* A thank-you in the senior's own voice: record up to 15 seconds, listen, send.
+   The driver gets a text with a link to play it (and it shows on the family screen). */
+function VoiceThanks({ st, update, notify, drivers, apptId }) {
+  const L = st.profile.lang;
+  const [stage, setStage] = useState('idle'); // idle → recording → ready → sending → sent
+  const [seconds, setSeconds] = useState(0);
+  const [clip, setClip] = useState(null);     // the recording: { blob, url }
+  const [problem, setProblem] = useState('');
+  const recorderRef = useRef(null);
+  const timerRef = useRef(null);
+  const names = drivers.map((d) => d.name).join(' & ');
+
+  // If the person leaves this screen while recording, stop the microphone.
+  useEffect(() => () => {
+    clearInterval(timerRef.current);
+    if (recorderRef.current && recorderRef.current.state === 'recording') recorderRef.current.stop();
+  }, []);
+
+  if (!window.MediaRecorder || !navigator.mediaDevices) return null; // this browser can't record
+
+  async function startRecording() {
+    setProblem('');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      setProblem(t(L, 'recNoMic'));
+      return;
+    }
+    const recorder = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+    const pieces = [];
+    recorder.ondataavailable = (e) => { if (e.data.size) pieces.push(e.data); };
+    recorder.onstop = () => {
+      clearInterval(timerRef.current);
+      stream.getTracks().forEach((track) => track.stop()); // turns off the microphone light
+      const blob = new Blob(pieces, { type: recorder.mimeType || 'audio/webm' });
+      setClip({ blob, url: URL.createObjectURL(blob) });
+      setStage('ready');
+    };
+    recorder.start();
+    recorderRef.current = recorder;
+    setSeconds(0);
+    setStage('recording');
+    let elapsed = 0;
+    timerRef.current = setInterval(() => {
+      elapsed++;
+      setSeconds(elapsed);
+      if (elapsed >= 15) recorder.stop(); // keep it short
+    }, 1000);
+  }
+
+  function stopRecording() {
+    if (recorderRef.current && recorderRef.current.state === 'recording') recorderRef.current.stop();
+  }
+
+  async function sendIt() {
+    setStage('sending');
+    const dataUrl = await fileToDataUrl(clip.blob);
+    // With the server, save the recording and text each driver a link to it.
+    let link = '';
+    const srv = await getServer();
+    if (srv && srv.features.kv) {
+      try {
+        const j = await api('voice', { audio: dataUrl.split(',')[1], type: clip.blob.type });
+        link = j.url;
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+    update((n) => {
+      for (const d of drivers) {
+        n.messages.unshift({
+          id: uid('m'), to: d.id, from: 'senior', apptId, at: Date.now(), text: t(L, 'voiceMsg'),
+          audio: dataUrl.length < 400000 ? dataUrl : '', // kept on this phone for the family screen
+          audioUrl: link
+        });
+      }
+    });
+    if (link) drivers.forEach((d) => sendText(d, voiceText(st, link)));
+    notify(t(L, 'recSent', { name: names }), '', { channel: 'Push' });
+    setStage('sent');
+  }
+
+  return html`<div className="card stack" style=${{ width: '100%', alignItems: 'center' }}>
+    ${stage === 'idle' ? html`<button className="btn btn-secondary btn-block" onClick=${startRecording}><${Icon} name="mic" />${t(L, 'recThanks')}</button>` : null}
+    ${stage === 'recording' ? html`
+      <div className="row" style=${{ gap: 10 }}><span className="rec-dot" aria-hidden="true"></span><b aria-live="polite">${t(L, 'recording', { s: seconds })}</b></div>
+      <button className="btn btn-primary btn-block" onClick=${stopRecording}><${Icon} name="x" />${t(L, 'recStop')}</button>` : null}
+    ${stage === 'ready' || stage === 'sending' ? html`
+      <audio controls src=${clip.url} style=${{ width: '100%' }}></audio>
+      <button className="btn btn-primary btn-block" disabled=${stage === 'sending'} onClick=${sendIt}><${Icon} name="send" />${t(L, 'recSend', { name: names })}</button>
+      <button className="btn btn-soft btn-sm" disabled=${stage === 'sending'} onClick=${startRecording}>${t(L, 'recAgain')}</button>` : null}
+    ${stage === 'sent' ? html`<div className="row"><${Icon} name="check" /><b>${t(L, 'recSent', { name: names })}</b></div>` : null}
+    ${problem ? html`<p className="small muted center">${problem}</p>` : null}
   </div>`;
 }
 
@@ -833,7 +959,14 @@ function Letter({ st, update, go, notify }) {
     }
     const id = uid('cb');
     update((n) => {
-      const a = { id, source: 'letter', doctor: f.doctor || f.clinic, place: [f.clinic, f.address].filter(Boolean).join(', '), specialty: guessSpecialty((f.reason || '') + ' ' + (f.clinic || '') + ' ' + (f.doctor || '')), reason: f.reason || '—', start: iso, status: 'booked', phone: f.phone || '', prep: (f.prep || []).filter(Boolean), interpreter: f.interpreter || '', ride: { status: 'idle', driverId: null, askedId: null, declinedIds: [] }, delayMin: 0, followUp: null };
+      const a = {
+        id, source: 'letter', status: 'booked', start: iso,
+        doctor: f.doctor || f.clinic,
+        place: [f.clinic, f.address].filter(Boolean).join(', '),
+        specialty: guessSpecialty((f.reason || '') + ' ' + (f.clinic || '') + ' ' + (f.doctor || '')),
+        reason: f.reason || '—', phone: f.phone || '', prep: (f.prep || []).filter(Boolean), interpreter: f.interpreter || '',
+        ride: { status: 'idle', driverId: null, askedId: null, declinedIds: [] }, delayMin: 0, followUp: null
+      };
       n.appts.push(a); n.appts.sort((x, y) => new Date(x.start) - new Date(y.start));
       if (n.people.length) askNext(n, a);
     });
@@ -981,7 +1114,7 @@ function Reminders({ st, go, notify, saveFile }) {
 
 /* Shows which real services the server has, and the phone number used for test calls. */
 function RealServices({ st, update, srv }) {
-  if (FRAMED) return null;
+  if (!ON_WEBSITE) return null;
   const f = (srv && srv.features) || {};
   const chip = (on, label) => html`<span className=${'status ' + (on ? 'ok' : '')}>${on ? '✓' : '—'} ${label}</span>`;
   return html`<div className="card stack">
@@ -1006,6 +1139,29 @@ function Settings({ st, update, go, notify, resync, focus, srv }) {
   const langRef = useRef(null);
   useEffect(() => { if (focus === 'lang' && langRef.current) langRef.current.scrollIntoView({ block: 'start' }); }, []);
   const h = st.hospital;
+
+  // Real push (works even when CareBridge is closed): needs the server and, on iPhone, the Home Screen app.
+  async function turnOnPush() {
+    setPushMsg('');
+    try {
+      const id = await enablePush();
+      update((n) => { n.settings.pushId = id; n.settings.notify = true; });
+      setTimeout(() => pushNow(id, 'CareBridge', t(L, 'setNotif') + ' ✓'), 300);
+    } catch (e) {
+      setPushMsg(e.message);
+    }
+  }
+  // Without the server: the browser can still show notifications while the CareBridge tab is open.
+  async function turnOnBrowserNotifications() {
+    const answer = await Notification.requestPermission();
+    setPerm(answer);
+    update((n) => { n.settings.notify = answer === 'granted'; });
+    if (answer === 'granted') notify('CareBridge', t(L, 'remNone'));
+  }
+  function previewReminder() {
+    const driverName = st.people.length ? st.people[0].name : 'Avi';
+    notify(t(L, 'remDayBefore', { time: '9:30', doctor: 'Dr. Nirmala Gopalan' }), t(L, 'remPickup', { name: driverName, pickup: '8:50' }), { preview: true, channel: 'Push' });
+  }
   return html`<div className="stack-lg">
     <${TopBar} onBack=${() => go({ name: 'home' })} title=${t(L, 'setTitle')} />
     <div className="stack" ref=${langRef}><span className="eyebrow">${t(L, 'setLang')}</span><${LangTiles} value=${L} onPick=${(id) => update((n) => { n.profile.lang = id; })} /></div>
@@ -1022,108 +1178,298 @@ function Settings({ st, update, go, notify, resync, focus, srv }) {
     <div className="card stack">
       <span className="eyebrow">${t(L, 'setNotif')}</span>
       ${srv && srv.features.push ? html`<div className="row"><span className="grow small">${st.settings.pushId ? 'On: reminders arrive on this phone, even when CareBridge is closed.' : 'Get reminders on this phone, even when CareBridge is closed. On iPhone, add CareBridge to the Home Screen first (Share → Add to Home Screen).'}</span>
-          ${!st.settings.pushId ? html`<button className="btn btn-primary btn-sm" onClick=${async () => { setPushMsg(''); try { const id = await enablePush(); update((n) => { n.settings.pushId = id; n.settings.notify = true; }); setTimeout(() => pushNow(id, 'CareBridge', t(L, 'setNotif') + ' ✓'), 300); } catch (e) { setPushMsg(e.message); } }}>${t(L, 'setNotifOn')}</button>` : null}</div>
+          ${!st.settings.pushId ? html`<button className="btn btn-primary btn-sm" onClick=${turnOnPush}>${t(L, 'setNotifOn')}</button>` : null}</div>
         ${pushMsg ? html`<p className="small" style=${{ color: 'var(--danger)' }}>${pushMsg}</p>` : null}`
-      : REAL_OK && perm !== 'unsupported' ? html`<div className="row"><span className="grow small">${perm === 'granted' ? 'On' : 'Reminders and ride updates appear even when CareBridge is in the background (while the tab is open).'}</span>
-          ${perm !== 'granted' ? html`<button className="btn btn-primary btn-sm" onClick=${async () => { const p = await Notification.requestPermission(); setPerm(p); update((n) => { n.settings.notify = p === 'granted'; }); if (p === 'granted') notify('CareBridge', t(L, 'remNone')); }}>${t(L, 'setNotifOn')}</button>` : null}</div>`
+      : ON_WEBSITE && perm !== 'unsupported' ? html`<div className="row"><span className="grow small">${perm === 'granted' ? 'On' : 'Reminders and ride updates appear even when CareBridge is in the background (while the tab is open).'}</span>
+          ${perm !== 'granted' ? html`<button className="btn btn-primary btn-sm" onClick=${turnOnBrowserNotifications}>${t(L, 'setNotifOn')}</button>` : null}</div>`
         : html`<p className="small muted">Real phone notifications work on the CareBridge website. Here you see previews, and “${t(L, 'addCal')}” creates reminders in the phone's own calendar.</p>`}
-      <button className="btn btn-secondary btn-sm" onClick=${() => notify(t(L, 'remDayBefore', { time: '9:30', doctor: 'Dr. Nirmala Gopalan' }), t(L, 'remPickup', { name: (st.people[0] || { name: 'Avi' }).name, pickup: '8:50' }), { preview: true, channel: 'Push' })}>Preview a reminder</button>
+      <button className="btn btn-secondary btn-sm" onClick=${previewReminder}>Preview a reminder</button>
     </div>
     <button className="list-choice" onClick=${() => go({ name: 'letter' })}><${Icon} name="doc" /><span className="grow"><b>${t(L, 'letterTitle')}</b></span><${Icon} name="chev" /></button>
     <${RealServices} st=${st} update=${update} srv=${srv} />
     ${!confirmReset ? html`<button className="btn btn-secondary btn-block" style=${{ color: 'var(--danger)' }} onClick=${() => setConfirmReset(true)}>${t(L, 'setReset')}</button>`
       : html`<div className="card stack"><b>${t(L, 'setReset')}?</b><div className="tiles"><button className="btn btn-primary" onClick=${() => { clearState(); location.reload(); }}>${t(L, 'yes')}</button><button className="btn btn-secondary" onClick=${() => setConfirmReset(false)}>${t(L, 'cancel')}</button></div></div>`}
-    <p className="small muted center">CareBridge · data stays on this phone · ${IN_CLAUDE ? 'claude.ai preview' : REAL_OK ? 'website version' : 'local file'}</p>
+    <p className="small muted center">CareBridge · data stays on this phone · ${ON_WEBSITE ? 'website version' : 'local file (demo mode)'}</p>
   </div>`;
 }
 
 /* =====================================================================
-   FAMILY VIEW (what Avi sees on her own phone)
+   FAMILY VIEW (what a family member like Avi sees on her own phone)
    ===================================================================== */
 function Family({ st, update, go, id, notify }) {
   const p = st.people.find((x) => x.id === id);
   if (!p) return html`<div><${TopBar} onBack=${() => go({ name: 'home' })} /><p>Not found.</p></div>`;
+  const L = st.profile.lang;
   const senior = st.profile.name || 'Your family member';
-  // Each ride is its own request: a weekly visit can ask for the ride there and the ride home separately.
-  const legItems = (pred) => st.appts.filter(isUpcoming).flatMap((a) => legsOf(a).filter((leg) => pred(a[legKey(leg)])).map((leg) => ({ a, leg, key: a.id + '|' + leg })));
-  const asks = legItems((r) => r.status === 'asking' && r.askedId === p.id);
-  const mine = legItems((r) => r.status === 'confirmed' && r.driverId === p.id);
-  const legName = (a, leg) => (a.seriesId ? (leg === 'back' ? 'Ride home' : 'Ride there') : 'Ride');
+  const onSeniorsPhone = { channel: senior + "'s phone" };
+
+  // Every ride is its own request. A weekly visit has two: the ride there and the ride home.
+  const asks = [];
+  const mine = [];
+  for (const a of st.appts.filter(isUpcoming)) {
+    for (const leg of legsOf(a)) {
+      const ride = a[legKey(leg)];
+      if (ride.status === 'asking' && ride.askedId === p.id) asks.push({ a, leg });
+      if (ride.status === 'confirmed' && ride.driverId === p.id) mine.push({ a, leg });
+    }
+  }
   const notes = st.messages.filter((m) => m.to === p.id);
-  const dayWord = (iso) => new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(new Date(iso)) + (new Date(iso).getHours() < 12 ? ' mornings' : ' afternoons');
+
+  function rideName(a, leg) {
+    if (!a.seriesId) return 'Ride';
+    return leg === 'back' ? 'Ride home' : 'Ride there';
+  }
+  function question(a, leg) {
+    if (!a.seriesId) return senior + " has a doctor's visit";
+    if (leg === 'back') return 'Can you bring ' + senior + ' home from ' + a.reason + '?';
+    return 'Can you drive ' + senior + ' to ' + a.reason + '?';
+  }
+  function pickupLine(a, leg) {
+    if (leg === 'back') return 'Pick up at the clinic ' + fmtTime(endTime(a), 'en') + ' · we text you when the session ends';
+    return 'Pick up ' + fmtTime(pickupTime(a), 'en') + ' · ' + (a.seriesId ? 'from home' : a.doctor);
+  }
+  function freeTimeWords(iso) {
+    const d = new Date(iso);
+    const day = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(d);
+    return day + (d.getHours() < 12 ? ' mornings' : ' afternoons');
+  }
+
+  function sayYes(a, leg) {
+    update((n) => acceptRide(n, a.id, p.id, leg));
+    notify(saidYesText(L, a, leg, p.name), fmtDay(a.start, L) + ' · ' + fmtTime(legTime(a, leg), L), onSeniorsPhone);
+  }
+  function takeEveryWeek(a, leg) {
+    update((n) => {
+      acceptRide(n, a.id, p.id, leg);
+      setStanding(n, a.seriesId, leg, p.id);
+    });
+    const day = fmtWeekdayLong(new Date(a.start).getDay(), L);
+    notify(t(L, leg === 'back' ? 'bringsYou' : 'dropsYou', { name: p.name }), t(L, 'everyDay', { day }), onSeniorsPhone);
+  }
+  function sayNo(a, leg) {
+    update((n) => declineRide(n, a.id, p.id, leg));
+  }
+  function cantThisWeekTap(a, leg) {
+    update((n) => { cantThisWeek(n, a.id, leg); });
+    notify('Thanks for letting us know', 'Only ' + fmtDay(a.start, 'en') + ' is affected. We will quietly ask someone else.', { channel: p.name + "'s phone" });
+  }
+
   return html`<div className="stack-lg">
     <div className="top">
       <div className="brand"><${Icon} name="people" size=${20} /><span>Family circle</span></div>
       <span className="muted small">Hi, ${p.name} · <span className="badge-demo">${p.name}'s phone</span></span>
     </div>
-    ${asks.length ? asks.map(({ a, leg, key }) => { const r = a[legKey(leg)]; return html`<div key=${key} className="stack-lg">
-      <div className="stack"><span className="eyebrow">${a.seriesId ? 'Ride request · ' + legName(a, leg) : 'Ride request'}</span><h1 className="h1" style=${{ fontSize: '1.6rem' }}>${a.seriesId ? (leg === 'back' ? 'Can you bring ' + senior + ' home from ' + a.reason + '?' : 'Can you drive ' + senior + ' to ' + a.reason + '?') : senior + " has a doctor's visit"}</h1></div>
-      <div className="card stack" style=${{ gap: 0, padding: 0 }}>
-        <div className="row" style=${{ padding: 16 }}><${Icon} name="cal" /><span>${fmtDay(a.start, 'en')} · ${fmtTime(visitTime(a), 'en')}${a.seriesId ? '–' + fmtTime(endTime(a), 'en') : ''}</span></div><div className="divider" style=${{ marginLeft: 52 }}></div>
-        <div className="row" style=${{ padding: 16 }}><${Icon} name="pin" /><span>${a.place || a.doctor}</span></div><div className="divider" style=${{ marginLeft: 52 }}></div>
-        <div className="row" style=${{ padding: 16 }}><${Icon} name="car" /><span>${leg === 'back' ? 'Pick up at the clinic ' + fmtTime(endTime(a), 'en') + ' · we text you when the session ends' : 'Pick up ' + fmtTime(pickupTime(a), 'en') + ' · ' + (a.seriesId ? 'from home' : a.doctor)}</span></div>
+
+    ${asks.map(({ a, leg }) => html`<div key=${a.id + leg} className="stack-lg">
+      <div className="stack">
+        <span className="eyebrow">Ride request${a.seriesId ? ' · ' + rideName(a, leg) : ''}</span>
+        <h1 className="h1" style=${{ fontSize: '1.6rem' }}>${question(a, leg)}</h1>
       </div>
-      <div className="row card card-tint" style=${{ padding: 12 }}><${Icon} name=${r.outside ? 'clock' : 'check'} /><span className="small" style=${{ fontWeight: 600 }}>${r.outside ? 'Outside your usual free times' : 'Fits your free ' + dayWord(legTime(a, leg))}</span></div>
+      <div className="card stack" style=${{ gap: 0, padding: 0 }}>
+        <div className="row" style=${{ padding: 16 }}><${Icon} name="cal" /><span>${fmtDay(a.start, 'en')} · ${fmtTime(visitTime(a), 'en')}${a.seriesId ? '–' + fmtTime(endTime(a), 'en') : ''}</span></div>
+        <div className="divider" style=${{ marginLeft: 52 }}></div>
+        <div className="row" style=${{ padding: 16 }}><${Icon} name="pin" /><span>${a.place || a.doctor}</span></div>
+        <div className="divider" style=${{ marginLeft: 52 }}></div>
+        <div className="row" style=${{ padding: 16 }}><${Icon} name="car" /><span>${pickupLine(a, leg)}</span></div>
+      </div>
+      <div className="row card card-tint" style=${{ padding: 12 }}>
+        <${Icon} name=${a[legKey(leg)].outside ? 'clock' : 'check'} />
+        <span className="small" style=${{ fontWeight: 600 }}>${a[legKey(leg)].outside ? 'Outside your usual free times' : 'Fits your free ' + freeTimeWords(legTime(a, leg))}</span>
+      </div>
       <div className="stack">
         <span className="eyebrow">${senior}'s ride circle</span>
-        <div className="avatars">${st.people.map((x) => html`<div key=${x.id} className="av"><${Avatar} name=${x.name} on=${x.id === p.id} /><span style=${{ fontWeight: x.id === p.id ? 700 : 400 }}>${x.name}${x.id === p.id ? ' (you)' : ''}</span></div>`)}</div>
+        <div className="avatars">${st.people.map((x) => html`<div key=${x.id} className="av">
+          <${Avatar} name=${x.name} on=${x.id === p.id} />
+          <span style=${{ fontWeight: x.id === p.id ? 700 : 400 }}>${x.name}${x.id === p.id ? ' (you)' : ''}</span>
+        </div>`)}</div>
       </div>
       <div className="stack">
-        <button className="btn btn-primary btn-block" onClick=${() => { update((n) => acceptRide(n, a.id, p.id, leg)); const L = st.profile.lang; const rl = rideLine(Object.assign({}, st, { appts: [] }), Object.assign({}, a, { [legKey(leg)]: Object.assign({}, r, { status: 'confirmed', driverId: p.id }) }), leg); notify(rl ? rl.text : p.name, fmtDay(a.start, L) + ' · ' + (rl ? rl.sub : ''), { channel: senior + "'s phone" }); }}>I'll drive${a.seriesId ? ' this week' : ''}</button>
-        ${a.seriesId ? html`<button className="btn btn-soft btn-block" onClick=${() => { update((n) => { acceptRide(n, a.id, p.id, leg); setStanding(n, a.seriesId, leg, p.id); }); const L = st.profile.lang; notify(t(L, leg === 'back' ? 'bringsYou' : 'dropsYou', { name: p.name }), t(L, 'everyDay', { day: fmtWeekdayLong(new Date(a.start).getDay(), L) }), { channel: senior + "'s phone" }); }}>Take this ride every week</button>` : null}
-        <button className="btn btn-secondary btn-block" onClick=${() => { update((n) => declineRide(n, a.id, p.id, leg)); }}>Can't this time</button>
+        <button className="btn btn-primary btn-block" onClick=${() => sayYes(a, leg)}>I'll drive${a.seriesId ? ' this week' : ''}</button>
+        ${a.seriesId ? html`<button className="btn btn-soft btn-block" onClick=${() => takeEveryWeek(a, leg)}>Take this ride every week</button>` : null}
+        <button className="btn btn-secondary btn-block" onClick=${() => sayNo(a, leg)}>Can't this time</button>
         <p className="small muted center">No pressure. If you can't, we'll quietly ask the next person. ${senior} only sees who's driving.</p>
       </div>
-    </div>`; }) : html`<div className="card card-tint stack"><b>No ride requests right now.</b><span className="small muted">When ${senior} books a visit that fits your free times, you'll get a request here.</span></div>`}
-    ${mine.length ? html`<div className="card stack"><span className="eyebrow">You're driving</span>${mine.map(({ a, leg, key }) => html`<div key=${key} className="row" style=${{ alignItems: 'flex-start' }}><${DateTile} iso=${a.start} lang="en" /><div className="grow stack" style=${{ gap: 2 }}><b>${a.seriesId ? a.reason + ' · ' + legName(a, leg) : a.doctor}</b><div className="muted small">Pick up ${leg === 'back' ? 'at the clinic ' : ''}${fmtTime(legTime(a, leg), 'en')}${a.delayMin ? ' (clinic running ' + a.delayMin + ' min late)' : ''}${a[legKey(leg)].standing ? ' · every week' : ''}</div>
-      ${a.seriesId ? html`<button className="link-btn small" style=${{ alignSelf: 'flex-start' }} onClick=${() => { let asked = null; update((n) => { asked = cantThisWeek(n, a.id, leg); }); notify('Thanks for letting us know', 'Only ' + fmtDay(a.start, 'en') + ' is affected. We will quietly ask someone else.', { channel: p.name + "'s phone" }); }}>Can't this week</button>` : null}</div></div>`)}</div>` : null}
-    ${notes.length ? html`<div className="card stack"><span className="eyebrow">From ${senior}</span>${notes.map((m) => html`<div key=${m.id} className="row"><${Icon} name="heart" /><span>“${m.text}”</span></div>`)}</div>` : null}
+    </div>`)}
+    ${!asks.length ? html`<div className="card card-tint stack">
+      <b>No ride requests right now.</b>
+      <span className="small muted">When ${senior} has a visit that fits your free times, you'll get a request here.</span>
+    </div>` : null}
+
+    ${mine.length ? html`<div className="card stack">
+      <span className="eyebrow">You're driving</span>
+      ${mine.map(({ a, leg }) => html`<div key=${a.id + leg} className="row" style=${{ alignItems: 'flex-start' }}>
+        <${DateTile} iso=${a.start} lang="en" />
+        <div className="grow stack" style=${{ gap: 2 }}>
+          <b>${a.seriesId ? a.reason + ' · ' + rideName(a, leg) : a.doctor}</b>
+          <div className="muted small">
+            Pick up ${leg === 'back' ? 'at the clinic ' : ''}${fmtTime(legTime(a, leg), 'en')}
+            ${a.delayMin ? ' (clinic running ' + a.delayMin + ' min late)' : ''}
+            ${a[legKey(leg)].standing ? ' · every week' : ''}
+          </div>
+          ${a.seriesId ? html`<button className="link-btn small" style=${{ alignSelf: 'flex-start' }} onClick=${() => cantThisWeekTap(a, leg)}>Can't this week</button>` : null}
+        </div>
+      </div>`)}
+    </div>` : null}
+
+    ${notes.length ? html`<div className="card stack">
+      <span className="eyebrow">From ${senior}</span>
+      ${notes.map((m) => (m.audio || m.audioUrl)
+        ? html`<div key=${m.id} className="stack" style=${{ gap: 6 }}>
+            <div className="row"><${Icon} name="mic" /><b>${senior}'s voice</b></div>
+            <audio controls src=${m.audio || m.audioUrl} style=${{ width: '100%' }}></audio>
+          </div>`
+        : html`<div key=${m.id} className="row"><${Icon} name="heart" /><span>“${m.text}”</span></div>`)}
+    </div>` : null}
     <button className="btn btn-soft btn-block" onClick=${() => go({ name: 'home' })}>Back to ${senior}'s phone</button>
   </div>`;
 }
 
 /* =====================================================================
-   DEMO CONTROLS (for judges and the video)
+   DEMO CONTROLS (for the judges and the video; the senior never sees this)
    ===================================================================== */
 function DemoSheet({ st, update, go, close, notify }) {
   const L = st.profile.lang;
   const next = st.appts.filter(isUpcoming)[0];
-  const doAndClose = (fn) => { fn(); close(); };
+  const nextWeekly = st.appts.find((a) => a.seriesId && isUpcoming(a));
+  const hasDemoPhysio = (st.series || []).some((w) => w.demo && w.active);
+
+  function jumpToVisitDay() {
+    update((n) => { n.demoToday = next.id; });
+    go({ name: 'visit', id: next.id });
+    notify(t(L, 'remDayOf', { time: fmtTime(visitTime(next), L), doctor: next.doctor }), '', { preview: true, channel: 'Push' });
+    close();
+  }
+
+  function clinicRunsLate() {
+    update((n) => { n.appts.find((x) => x.id === next.id).delayMin = 20; });
+    const newPickup = new Date(new Date(pickupTime(next)).getTime() + 20 * 60000).toISOString();
+    const driver = st.people.find((p) => p.id === next.ride.driverId);
+    if (driver) {
+      sendText(driver, 'CareBridge: the clinic is running 20 minutes late. New pickup time: ' + fmtTime(newPickup, 'en') + '.');
+      notify(t(L, 'lateTitle', { n: 20 }), t(L, 'lateBody', { name: driver.name, time: fmtTime(newPickup, L) }), { channel: 'Push' });
+    } else {
+      notify(t(L, 'lateTitle', { n: 20 }), '', { channel: 'Push' });
+    }
+    close();
+  }
+
+  // Pretend the hospital moved a visit by two days, then sync it the same way a real sync would.
+  function hospitalMovesVisit() {
+    let message = null;
+    update((n) => {
+      const portalVisits = n.appts.filter((a) => a.source === 'portal' && isUpcoming(a));
+      const target = portalVisits.find((a) => !next || a.id !== next.id) || portalVisits[0];
+      if (!target) return;
+      const moved = Object.assign({}, target, { start: new Date(new Date(target.start).getTime() + 2 * DAY).toISOString() });
+      const changes = mergeSync(n, [moved]);
+      n.hospital.lastSync = Date.now();
+      if (!changes.length) return;
+      const visit = n.appts.find((x) => x.id === target.id);
+      const driver = n.people.find((p) => p.id === visit.ride.driverId);
+      message = visit.doctor + ' → ' + fmtDay(visit.start, L) + ' ' + fmtTime(visit.start, L);
+      if (driver) {
+        // The old driver said yes to the old time, so ask again for the new time.
+        message += ' · ' + driver.name + ' ✓';
+        visit.ride = { status: 'idle', driverId: null, askedId: null, declinedIds: [] };
+        askNext(n, visit);
+      }
+    });
+    setTimeout(() => { if (message) notify('MyChart sync: visit moved', message, { channel: 'Push' }); }, 50);
+    close();
+  }
+
+  function addPhysio() {
+    update((n) => { addDemoPhysio(n); });
+    go({ name: 'rides' });
+    notify(t(L, 'weeklySaved'), t(L, 'physio') + ' · ' + t(L, 'everyDay', { day: fmtWeekdayLong(4, L) }) + ' ' + fmtTime(atTime(0, 16, 0), L), { channel: 'Push' });
+    close();
+  }
+
+  function jumpToPhysioDay() {
+    update((n) => {
+      n.demoToday = nextWeekly.id;
+      const visit = n.appts.find((y) => y.id === nextWeekly.id);
+      if (visit.ride.status === 'idle') askNext(n, visit, 'to');
+      if (visit.rideBack.status === 'idle') askNext(n, visit, 'back');
+    });
+    go({ name: 'visit', id: nextWeekly.id });
+    close();
+  }
+
+  function previewReminder() {
+    if (next) {
+      const driver = st.people.find((p) => p.id === next.ride.driverId);
+      const body = driver ? t(L, 'remPickup', { name: driver.name, pickup: fmtTime(pickupTime(next), L) }) : '';
+      notify(t(L, 'remDayBefore', { time: fmtTime(visitTime(next), L), doctor: next.doctor }), body, { preview: true, channel: 'Push' });
+    }
+    close();
+  }
+
+  // Start over with Purna Ji, her hospital visits and her family, with past rides already filled in.
+  function loadSample() {
+    update((n) => {
+      const lang = n.profile.lang;
+      const bundle = demoBundle('Purna Ji');
+      Object.assign(n, blankState());
+      n.profile = { name: 'Purna Ji', lang, setupDone: false, bigText: false };
+      n.setupStep = 'ready';
+      n.hospital = Object.assign({}, HOSPITALS[0], { mode: 'demo', server: 'demo', connectedAt: Date.now(), lastSync: Date.now() });
+      n.patient = mapPatient(bundle.patient, bundle.meds);
+      n.patient.fullName = 'Purna Sharma';
+      mergeSync(n, bundle.appts.map(mapAppointment));
+      n.people = sampleFamily();
+      let i = 0;
+      for (const a of n.appts.filter((x) => x.status === 'done')) {
+        a.ride.driverId = n.people[i % n.people.length].id;
+        a.ride.status = 'confirmed';
+        i++;
+      }
+      for (const a of n.appts.filter(isUpcoming)) {
+        const person = askNext(n, a);
+        if (person) acceptRide(n, a.id, person.id);
+      }
+    });
+    close();
+  }
+
   return html`<div className="sheet-back" onClick=${close}>
     <div className="sheet" role="dialog" aria-modal="true" aria-label="Demo controls" onClick=${(e) => e.stopPropagation()}>
-      <div className="row" style=${{ justifyContent: 'space-between' }}><b className="h2">Demo controls</b><button className="icon-btn" aria-label="Close" onClick=${close}><${Icon} name="x" /></button></div>
+      <div className="row" style=${{ justifyContent: 'space-between' }}>
+        <b className="h2">Demo controls</b>
+        <button className="icon-btn" aria-label="Close" onClick=${close}><${Icon} name="x" /></button>
+      </div>
       <p className="small muted">For the judges and the video. The senior never sees this panel.</p>
+
       <span className="eyebrow">See a family member's phone</span>
-      <div className="chips">${st.people.map((p) => html`<button key=${p.id} className="chip" onClick=${() => doAndClose(() => go({ name: 'family', id: p.id }))}>${p.name}</button>`)}${!st.people.length ? html`<span className="small muted">Add a ride circle first.</span>` : null}</div>
-      <div className="setting"><span>Family accepts ride requests automatically</span><button className="switch" role="switch" aria-checked=${!!st.settings.autoAccept} aria-label="Auto-accept rides" onClick=${() => update((n) => { n.settings.autoAccept = !n.settings.autoAccept; })}></button></div>
+      <div className="chips">
+        ${st.people.map((p) => html`<button key=${p.id} className="chip" onClick=${() => { go({ name: 'family', id: p.id }); close(); }}>${p.name}</button>`)}
+        ${!st.people.length ? html`<span className="small muted">Add a ride circle first.</span>` : null}
+      </div>
+      <div className="setting">
+        <span>Family accepts ride requests automatically</span>
+        <button className="switch" role="switch" aria-checked=${!!st.settings.autoAccept} aria-label="Auto-accept rides" onClick=${() => update((n) => { n.settings.autoAccept = !n.settings.autoAccept; })}></button>
+      </div>
+
       <span className="eyebrow">Next visit${next ? ': ' + next.doctor : ''}</span>
       <div className="stack">
-        <button className="btn btn-secondary btn-sm" disabled=${!next} onClick=${() => doAndClose(() => { update((n) => { n.demoToday = next.id; }); go({ name: 'visit', id: next.id }); notify(t(L, 'remDayOf', { time: fmtTime(visitTime(next), L), doctor: next.doctor }), '', { preview: true, channel: 'Push' }); })}>Jump to the day of the visit</button>
-        <button className="btn btn-secondary btn-sm" disabled=${!next} onClick=${() => doAndClose(() => { update((n) => { const a = n.appts.find((x) => x.id === next.id); a.delayMin = 20; }); const d = st.people.find((p) => p.id === next.ride.driverId); if (d) sendText(d, 'CareBridge: the clinic is running 20 minutes late. New pickup time: ' + fmtTime(new Date(new Date(pickupTime(next)).getTime() + 20 * 60000).toISOString(), 'en') + '.'); notify(t(L, 'lateTitle', { n: 20 }), d ? t(L, 'lateBody', { name: d.name, time: fmtTime(new Date(new Date(pickupTime(next)).getTime() + 20 * 60000).toISOString(), L) }) : '', { channel: 'Push' }); })}>Clinic is running 20 minutes late</button>
-        <button className="btn btn-secondary btn-sm" disabled=${!st.hospital || st.hospital.mode !== 'demo'} onClick=${() => doAndClose(() => {
-          let msg = null;
-          update((n) => {
-            const target = n.appts.find((a) => a.source === 'portal' && isUpcoming(a) && a.id !== (next && next.id)) || n.appts.find((a) => a.source === 'portal' && isUpcoming(a));
-            if (!target) return;
-            const moved = Object.assign({}, target, { start: new Date(new Date(target.start).getTime() + 2 * DAY).toISOString() });
-            const changes = mergeSync(n, [moved]);
-            n.hospital.lastSync = Date.now();
-            if (changes.length) { const c = changes[0]; const d = n.people.find((p) => p.id === c.appt.ride.driverId); msg = [c.appt.doctor + ' → ' + fmtDay(c.to, L) + ' ' + fmtTime(c.to, L), d ? d.name + ' ✓' : '']; if (d) { const a = n.appts.find((x) => x.id === c.appt.id); a.ride.status = 'idle'; a.ride.driverId = null; a.ride.declinedIds = []; askNext(n, a); } }
-          });
-          setTimeout(() => msg && notify('MyChart sync: visit moved', msg.join(' · '), { channel: 'Push' }), 50);
-        })}>Hospital moves a visit (sync picks it up)</button>
-        <button className="btn btn-secondary btn-sm" disabled=${!next} onClick=${() => doAndClose(() => go({ name: 'after', id: next.id }))}>Finish the next visit</button>
+        <button className="btn btn-secondary btn-sm" disabled=${!next} onClick=${jumpToVisitDay}>Jump to the day of the visit</button>
+        <button className="btn btn-secondary btn-sm" disabled=${!next} onClick=${clinicRunsLate}>Clinic is running 20 minutes late</button>
+        <button className="btn btn-secondary btn-sm" disabled=${!st.hospital || st.hospital.mode !== 'demo'} onClick=${hospitalMovesVisit}>Hospital moves a visit (sync picks it up)</button>
+        <button className="btn btn-secondary btn-sm" disabled=${!next} onClick=${() => { go({ name: 'after', id: next.id }); close(); }}>Finish the next visit</button>
       </div>
-      <span className="eyebrow">Weekly visit (v1.2)</span>
+
+      <span className="eyebrow">Weekly visit</span>
       <div className="stack">
-        <button className="btn btn-secondary btn-sm" disabled=${!st.people.length || (st.series || []).some((w) => w.demo && w.active)} onClick=${() => doAndClose(() => { update((n) => { addDemoPhysio(n); }); go({ name: 'rides' }); notify(t(L, 'weeklySaved'), t(L, 'physio') + ' · ' + t(L, 'everyDay', { day: fmtWeekdayLong(4, L) }) + ' ' + fmtTime(atTime(0, 14, 0), L), { channel: 'Push' }); })}>Add Purna Ji's Thursday physio</button>
-        ${(() => { const nw = st.appts.find((a) => a.seriesId && isUpcoming(a)); return html`<button className="btn btn-secondary btn-sm" disabled=${!nw} onClick=${() => doAndClose(() => { update((n) => { n.demoToday = nw.id; const x = n.appts.find((y) => y.id === nw.id); LEGS.forEach((leg) => { if (x[legKey(leg)].status === 'idle') askNext(n, x, leg); }); }); go({ name: 'visit', id: nw.id }); })}>Jump to physio day (asks for any open ride)</button>`; })()}
+        <button className="btn btn-secondary btn-sm" disabled=${!st.people.length || hasDemoPhysio} onClick=${addPhysio}>Add Purna Ji's Thursday physio</button>
+        <button className="btn btn-secondary btn-sm" disabled=${!nextWeekly} onClick=${jumpToPhysioDay}>Jump to physio day (asks for any open ride)</button>
       </div>
+
       <span className="eyebrow">Notifications</span>
-      <button className="btn btn-secondary btn-sm" onClick=${() => doAndClose(() => next && notify(t(L, 'remDayBefore', { time: fmtTime(visitTime(next), L), doctor: next.doctor }), (st.people.find((p) => p.id === next.ride.driverId) || {}).name ? t(L, 'remPickup', { name: st.people.find((p) => p.id === next.ride.driverId).name, pickup: fmtTime(pickupTime(next), L) }) : '', { preview: true, channel: 'Push' }))}>Preview the day-before reminder</button>
+      <button className="btn btn-secondary btn-sm" onClick=${previewReminder}>Preview the day-before reminder</button>
+
       <span className="eyebrow">Start over</span>
       <div className="tiles">
-        <button className="btn btn-soft btn-sm" onClick=${() => doAndClose(() => update((n) => { const keepLang = n.profile.lang; const b = demoBundle(n.profile.name || 'Purna Ji'); Object.assign(n, blankState()); n.profile = { name: 'Purna Ji', lang: keepLang, setupDone: false, bigText: false }; n.setupStep = 'ready'; n.hospital = Object.assign({}, HOSPITALS[0], { mode: 'demo', server: 'demo', connectedAt: Date.now(), lastSync: Date.now() }); n.patient = mapPatient(b.patient, b.meds); n.patient.fullName = 'Purna Sharma'; mergeSync(n, b.appts.map(mapAppointment)); n.people = sampleFamily(); let i = 0; n.appts.filter((a) => a.status === 'done').forEach((a) => { a.ride.driverId = n.people[i++ % 4].id; a.ride.status = 'confirmed'; }); n.appts.filter(isUpcoming).forEach((a) => { const c = askNext(n, a); if (c) acceptRide(n, a.id, c.id); }); }))}>Load Purna Ji sample</button>
+        <button className="btn btn-soft btn-sm" onClick=${loadSample}>Load Purna Ji sample</button>
         <button className="btn btn-secondary btn-sm" onClick=${() => { clearState(); location.reload(); }}>Reset everything</button>
       </div>
     </div>
@@ -1160,21 +1506,21 @@ function App() {
       if (opts.preview) return;
       const s = stRef.current;
       if (s.settings.pushId) pushNow(s.settings.pushId, title, body);
-      else if (REAL_OK && s.settings.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification(title, { body });
+      else if (ON_WEBSITE && s.settings.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification(title, { body });
     } catch (e) { }
   }, []);
   const showToast = (s) => { setToast(s); setTimeout(() => setToast(''), 2600); };
 
-  // Calendar file: a plain download on the website; the claude.ai preview cannot save .ics files.
+  // Calendar file: a plain download on the website; a page opened as a plain file can't save it.
   const saveFile = useCallback((filename, data, type) => {
-    if (FRAMED) { showToast('Calendar files download on the CareBridge website version.'); return; }
+    if (!ON_WEBSITE) { showToast('Calendar files download on the CareBridge website version.'); return; }
     try { const url = URL.createObjectURL(new Blob([data], { type })); const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
     catch (e) { showToast('Could not create the calendar file.'); }
   }, []);
 
   // Finish a real hospital sign-in when the hospital sends the person back here.
   useEffect(() => {
-    if (!REAL_OK || !/[?&](code|error)=/.test(location.search)) return;
+    if (!ON_WEBSITE || !/[?&](code|error)=/.test(location.search)) return;
     setSyncing(true);
     smartComplete().then((res) => {
       setSyncing(false);
@@ -1210,23 +1556,40 @@ function App() {
   }, [st, srv]);
   useEffect(() => {
     if (!srv || !srv.features.sms) return;
-    const waiting = () => stRef.current.appts.filter(isUpcoming).flatMap((a) => legsOf(a).filter((leg) => { const r = a[legKey(leg)]; return r.status === 'asking' && r.smsTo && r.smsTo === r.askedId; }).map((leg) => ({ a, leg, rid: smsRequestId(a, leg), askedId: a[legKey(leg)].askedId })));
+    // Every 4 seconds, ask the server whether anyone we texted has answered YES or NO.
     const id = setInterval(async () => {
-      const list = waiting(); if (!list.length) return;
-      try {
-        const j = await api('sms/replies?ids=' + list.map((x) => encodeURIComponent(x.rid)).join(','));
-        for (const { a, leg, rid, askedId } of list) {
-          const rep = j.replies[rid] && j.replies[rid][askedId];
-          if (!rep || rep.at < (a[legKey(leg)].askedAt || 0) - 60000) continue;
-          const s = stRef.current; const p = s.people.find((x) => x.id === askedId);
-          if (rep.answer === 'yes') {
-            update((n) => acceptRide(n, a.id, askedId, leg));
-            if (p) { const L = s.profile.lang; notify(a.seriesId ? t(L, leg === 'back' ? 'bringsYou' : 'dropsYou', { name: p.name }) : t(L, 'driving', { name: p.name }), fmtDay(a.start, L) + ' · ' + (leg === 'back' ? t(L, 'backPickup', { time: fmtTime(endTime(a), L) }) : t(L, 'pickup', { time: fmtTime(pickupTime(a), L) })), { channel: 'Text reply' }); sendText(p, rideConfirmText(s, a, leg)); }
-          } else if (rep.answer === 'no') {
-            update((n) => declineRide(n, a.id, askedId, leg));
-          }
+      const waiting = [];
+      for (const a of stRef.current.appts.filter(isUpcoming)) {
+        for (const leg of legsOf(a)) {
+          const ride = a[legKey(leg)];
+          if (ride.status === 'asking' && ride.smsTo && ride.smsTo === ride.askedId) waiting.push({ a, leg, ride });
         }
-      } catch (e) { /* try again next time */ }
+      }
+      if (!waiting.length) return;
+      let replies;
+      try {
+        const ids = waiting.map((w) => encodeURIComponent(smsRequestId(w.a, w.leg))).join(',');
+        replies = (await api('sms/replies?ids=' + ids)).replies;
+      } catch (e) {
+        return; // the server didn't answer; try again in 4 seconds
+      }
+      for (const { a, leg, ride } of waiting) {
+        const answers = replies[smsRequestId(a, leg)];
+        const reply = answers && answers[ride.askedId];
+        if (!reply) continue;
+        if (reply.at < (ride.askedAt || 0) - 60000) continue; // an old answer from before this request
+        if (reply.answer === 'no') {
+          update((n) => declineRide(n, a.id, ride.askedId, leg));
+          continue;
+        }
+        update((n) => acceptRide(n, a.id, ride.askedId, leg));
+        const s = stRef.current;
+        const person = s.people.find((x) => x.id === ride.askedId);
+        if (person) {
+          notify(saidYesText(s.profile.lang, a, leg, person.name), fmtDay(a.start, s.profile.lang) + ' · ' + fmtTime(legTime(a, leg), s.profile.lang), { channel: 'Text reply' });
+          sendText(person, rideConfirmText(s, a, leg));
+        }
+      }
     }, 4000);
     return () => clearInterval(id);
   }, [srv]);
@@ -1237,14 +1600,21 @@ function App() {
   // Demo helper: the family answers ride requests on their own after a moment.
   useEffect(() => {
     if (!st.settings.autoAccept) return;
-    let asking = null, leg = 'to';
-    for (const a of st.appts) { if (asking || !isUpcoming(a)) continue; for (const l of legsOf(a)) { const r = a[legKey(l)]; if (!asking && r.status === 'asking' && r.askedId) { asking = a; leg = l; } } }
+    // Find the first ride that is waiting for an answer.
+    let asking = null;
+    let leg = 'to';
+    for (const a of st.appts.filter(isUpcoming)) {
+      for (const l of legsOf(a)) {
+        if (!asking && a[legKey(l)].status === 'asking') { asking = a; leg = l; }
+      }
+    }
     if (!asking) return;
     const id = setTimeout(() => {
+      const L = st.profile.lang;
       const askedId = asking[legKey(leg)].askedId;
-      const p = st.people.find((x) => x.id === askedId);
+      const person = st.people.find((x) => x.id === askedId);
       update((n) => acceptRide(n, asking.id, askedId, leg));
-      if (p) notify(asking.seriesId ? t(st.profile.lang, leg === 'back' ? 'bringsYou' : 'dropsYou', { name: p.name }) : t(st.profile.lang, 'driving', { name: p.name }), fmtDay(asking.start, st.profile.lang) + ' · ' + fmtTime(legTime(asking, leg), st.profile.lang), { channel: 'Push' });
+      if (person) notify(saidYesText(L, asking, leg, person.name), fmtDay(asking.start, L) + ' · ' + fmtTime(legTime(asking, leg), L), { channel: 'Push' });
     }, 2200);
     return () => clearTimeout(id);
   }, [st]);
@@ -1254,7 +1624,7 @@ function App() {
   const resync = async () => {
     const h = st.hospital;
     if (!h) return;
-    if (h.mode === 'real' && REAL_OK) {
+    if (h.mode === 'real' && ON_WEBSITE) {
       const tok = savedToken();
       if (!tok) { smartBegin(h.server || 'smart'); return; }
       try {

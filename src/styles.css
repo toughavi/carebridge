@@ -231,3 +231,7 @@ code { font-size: .85em; background: var(--soft); padding: 1px 5px; border-radiu
 .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .row > svg { flex-shrink: 0; }
+
+.rec-dot { width: 12px; height: 12px; border-radius: 6px; background: #D92D20; animation: recpulse 1s ease-in-out infinite; }
+@keyframes recpulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }

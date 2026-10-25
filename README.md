@@ -12,7 +12,7 @@
 4. **Add a visit from a letter or photo:** for clinics that aren't connected, take a photo or paste the message; the AI fills in doctor, date, time, address and preparation steps, and highlights anything to check.
 5. **Rides without asking:** family members say when they're usually free. CareBridge **texts** one person at a time ("Reply YES or NO"), fewest rides first. A "no" is silent; the senior only sees who said yes.
 6. **Weekly visits (v1.2):** a standing appointment like physiotherapy is told once ("physio every Thursday at 2") by voice, typing or a letter. Nothing is booked. Every week has a **ride there** and a **ride home**, each with its own driver. A family member can take a ride every week ("Thursday drop-offs"); open rides are asked 5 days ahead, one person at a time. The senior taps **I'm done, come get me** to text the ride-home driver, or **Skip this week** to tell both drivers. A standing driver can say **Can't this week** and only that week is asked again.
-7. **Reminders and follow-up:** push notifications, calendar alarms, a clinic-delay alert that moves the pickup, a follow-up reminder, and a one-tap thank-you to the driver.
+7. **Reminders and follow-up:** push notifications, calendar alarms, a clinic-delay alert that moves the pickup, a follow-up reminder, and a thank-you to the driver: one tap, or recorded in the senior's own voice.
 
 ## What is real
 
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | Setup, dashboard, chart, languages, ride matching, weekly visits, reminders, follow-up | On the phone | Real |
 | Hospital sign-in | Website version | **Real SMART on FHIR** (OAuth 2.0 + PKCE): Epic's test system, SMART Health IT test server, and real hospitals (Stanford, SCVMC, El Camino, Sutter) once Epic's production ID is active |
-| Understanding requests and reading letters | claude.ai link, or website + server | Real Claude; keyword fallback if no AI |
+| Understanding requests and reading letters | Website + server | Real Claude; keyword fallback if no AI |
 | Calling the clinic | Website + server | **Real phone call** (Twilio + Claude, turn by turn); practice call otherwise |
 | Texts to family, YES/NO replies | Website + server | **Real texts** (Twilio) |
 | Push notifications | Installed website + server | **Real push**, including a daily evening reminder job |
@@ -46,8 +46,8 @@ To put it online with real calls, texts, push and Epic sign-in, follow **DEPLOY.
 | `src/core.js` | Logic with no screens: storage, dates, FHIR mapping, SMART sign-in, ride matching, reminders, AI, letter reading |
 | `src/ui.js` | Screens (React 18 with `htm` templates, no build step) |
 | `src/styles.css` | Design tokens and layout, light and dark |
-| `src/build.py` | Combines the four files into `index.html` (`npm run build:html`) |
-| `api/` | Server functions on Vercel: `ai`, `call/*`, `sms/*`, `push/*`, `cron/reminders`, `health` |
+| `src/build.py` | Pastes the four files together into `index.html` (`python3 src/build.py`) |
+| `api/` | Server functions on Vercel: `ai`, `call/*`, `sms/*`, `push/*`, `voice`, `cron/reminders`, `health` |
 | `scripts/dev-server.mjs` | Local server; `MOCK=1` simulates Claude, Twilio, the database and push |
 | `tests/` | Server tests |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Installable app and push notifications |
@@ -60,6 +60,6 @@ To put it online with real calls, texts, push and Epic sign-in, follow **DEPLOY.
 - Calls and texts only reach numbers on an approved list; every call starts by saying it is an AI; nothing is recorded.
 - Server keys live in Vercel's settings, never in the page.
 
-## AI use disclosure (draft — rewrite in your own words)
+## Version history and who did what
 
-This app was built with help from Claude, an AI assistant made by Anthropic. Claude drafted the implementation spec, wrote first versions of the code and tests, and helped design the screens. I [describe your part: chose the features from interviews with seniors, wrote the assistant's voice and tone rules, reviewed and changed the code for X and Y, tested it with N seniors, checked the Hindi text]. Inside the app, CareBridge uses Claude to understand what a senior says, read appointment letters, and talk to the clinic on a booking call.
+See **CHANGES.md** for what changed in each version and **CONTRIBUTIONS.md** for who did what.

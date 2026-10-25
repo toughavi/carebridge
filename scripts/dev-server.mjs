@@ -18,7 +18,9 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) {
-    const file = path.join(ROOT, url.pathname + '.js');
+    let file = path.join(ROOT, url.pathname + '.js');
+    // Like Vercel: api/push/[action].js answers /api/push/<anything>.
+    if (!fs.existsSync(file)) { const dyn = path.join(path.dirname(file), '[action].js'); if (fs.existsSync(dyn)) file = dyn; }
     if (!file.startsWith(path.join(ROOT, 'api')) || path.basename(file).startsWith('_') || !fs.existsSync(file)) { res.statusCode = 404; return res.end('Not found'); }
     try {
       const mod = await import(pathToFileURL(file).href);

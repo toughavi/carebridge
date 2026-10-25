@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   const kvOk = kvConfigured();
   send(res, 200, {
     ok: true,
-    version: '1.2.0',
+    version: '4.0.0',
     features: {
       ai: claudeConfigured(),
       calls: twilioConfigured() && claudeConfigured() && kvOk,

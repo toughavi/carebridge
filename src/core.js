@@ -1,12 +1,9 @@
 /* CareBridge — app logic with no UI: storage, dates, hospital sync (FHIR), ride matching, reminders, AI. */
 
 /* ---------- Where is the app running? ---------- */
-// Inside the claude.ai viewer the page is framed and outside network calls are blocked,
-// so the hospital sign-in is simulated there. On its own website (GitHub Pages, Vercel)
-// the same file can talk to Epic's real test system.
-const FRAMED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
-const IN_CLAUDE = FRAMED && !!window.claude;
-const REAL_OK = !FRAMED && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+// On the website (Vercel, or localhost while testing) the app can sign in to real hospitals,
+// download calendar files and use the server. Opened as a plain file, it runs in demo mode.
+const ON_WEBSITE = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
 const CONFIG = {
   // From fhir.epic.com after registering the app (see README). Leave empty until you have them.
@@ -449,12 +446,13 @@ function skipWeek(state, apptId) {
   a.status = 'cancelled'; a.skipped = true;
   return Array.from(new Set(drivers)).map((id) => state.people.find((p) => p.id === id)).filter(Boolean);
 }
-/* Demo: Purna Ji's Thursday physiotherapy, with three past weeks for the chart. Avi does drop-offs; the ride home is asked each week. */
+/* Demo: Purna Ji's Thursday physiotherapy at 4 (after Avi's school), with three past weeks for the chart.
+   Avi does the drop-offs every week; the ride home is asked each week. */
 function addDemoPhysio(state) {
   if ((state.series || []).some((s) => s.demo && s.active)) return null;
   const people = state.people;
   const id = (name) => (people.find((p) => p.name === name) || people[0] || {}).id || null;
-  const s = addSeries(state, { what: t(state.profile.lang, 'physio'), place: 'Valley Physical Therapy, 2100 Forest Ave, San Jose', weekday: 4, time: '14:00', durationMin: 60, standing: { to: id('Avi'), back: null } });
+  const s = addSeries(state, { what: t(state.profile.lang, 'physio'), place: 'Valley Physical Therapy, 2100 Forest Ave, San Jose', weekday: 4, time: '16:00', durationMin: 60, standing: { to: id('Avi'), back: null } });
   s.demo = true;
   const backs = [id('Krish'), id('Mini'), id('Krish')];
   for (let w = 1; w <= 3; w++) {
@@ -576,7 +574,7 @@ function fallbackUnderstand(text) {
 // real phone calls, real texts and push notifications. Without a server everything still works in demo mode.
 let serverPromise = null;
 function getServer() {
-  if (FRAMED || location.protocol === 'file:') return Promise.resolve(null);
+  if (!ON_WEBSITE) return Promise.resolve(null);
   if (!serverPromise) {
     serverPromise = fetch('/api/health', { headers: { Accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null)).then((j) => (j && j.ok ? j : null)).catch(() => null);
@@ -594,54 +592,34 @@ async function api(path, body, method) {
   return j;
 }
 
-/* ---------- AI: Claude inside claude.ai, or through the server on the website ---------- */
-let samplePromise = null;
-function getSample() {
-  if (!IN_CLAUDE || !window.claude || !window.claude.use) return Promise.resolve(null);
-  if (!samplePromise) samplePromise = window.claude.use('sample').catch(() => null);
-  return samplePromise;
+/* Turn a photo or a recording into a data URL ("data:audio/webm;base64,...") so it can travel as text. */
+function fileToDataUrl(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(file);
+  });
 }
-let aiOff = false;
-function blobToBase64(blob) {
-  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = rej; fr.readAsDataURL(blob); });
-}
-/* Which AI can this view use? 'sample' | 'server' | null. withImages asks for image support too. */
-async function aiMode(withImages) {
-  if (!aiOff) {
-    const sample = await getSample();
-    if (sample) {
-      if (!withImages) return 'sample';
-      const lim = await sample.limits().catch(() => null);
-      if (lim && lim.images) return 'sample';
-    }
-  }
+
+/* ---------- AI: Claude, through our server ---------- */
+// Ask Claude for a JSON answer. Returns null when the server has no AI or something fails;
+// every caller then falls back to simple keyword matching, so the app still works.
+async function aiJSON(prompt, image) {
   const srv = await getServer();
-  if (srv && srv.features && srv.features.ai) return 'server';
-  return null;
-}
-/* Ask Claude for JSON. Returns the parsed object, or null when no AI is available or it fails. */
-async function aiJSON(prompt, opts = {}) {
-  const mode = await aiMode(!!opts.image);
-  if (mode === 'sample') {
-    const sample = await getSample();
-    try {
-      const o = { modelTier: opts.tier || 'quick', cache: false };
-      if (opts.image) o.images = [opts.image];
-      return await sample.json(prompt, o);
-    } catch (e) {
-      if (e && ['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e.code)) aiOff = true;
-      return null;
+  if (!srv || !srv.features.ai) return null;
+  try {
+    const body = { prompt };
+    if (image) {
+      // Images travel as base64 text inside the JSON body.
+      const dataUrl = await fileToDataUrl(image);
+      body.images = [{ media_type: image.type || 'image/jpeg', data: dataUrl.split(',')[1] }];
     }
+    const j = await api('ai', body);
+    return j.json || null;
+  } catch (e) {
+    console.warn(e);
+    return null;
   }
-  if (mode === 'server') {
-    try {
-      const body = { prompt };
-      if (opts.image) body.images = [{ media_type: opts.image.type || 'image/jpeg', data: await blobToBase64(opts.image) }];
-      const j = await api('ai', body);
-      return j.json || null;
-    } catch (e) { console.warn(e); return null; }
-  }
-  return null;
 }
 
 async function understand(state, history) {
@@ -711,7 +689,7 @@ function parseLetterFallback(text) {
 }
 /* Returns { via: 'ai'|'fallback'|'none', fields } where fields matches the JSON shape above. */
 async function readLetter(state, { text, image }) {
-  const j = await aiJSON(letterPrompt(state, text), { image, tier: image ? 'default' : 'quick' });
+  const j = await aiJSON(letterPrompt(state, text), image);
   if (j && typeof j === 'object') {
     const f = Object.assign({ isAppointment: true, prep: [], unsure: [] }, j);
     f.prep = Array.isArray(f.prep) ? f.prep.filter(Boolean).slice(0, 5) : [];
@@ -779,6 +757,7 @@ function rideConfirmText(state, a, leg = 'to') {
   if (a.seriesId) return 'CareBridge: thank you! You are ' + (leg === 'back' ? 'bringing ' + (state.profile.name || 'them') + ' home' : 'driving ' + (state.profile.name || 'them') + ' there') + ' on ' + fmtDay(a.start, 'en') + '. Pickup ' + fmtTime(legTime(a, leg), 'en') + '. We will text you when the session ends.';
   return 'CareBridge: thank you! You are driving ' + (state.profile.name || 'them') + ' on ' + fmtDay(a.start, 'en') + '. Pickup ' + fmtTime(pickupTime(a), 'en') + '. We will remind you the day before.';
 }
+function voiceText(state, link) { return 'CareBridge: ' + (state.profile.name || 'Your family member') + ' recorded a thank-you for you. Listen: ' + link; }
 function doneText(state, a) { return 'CareBridge: ' + (state.profile.name || 'Your family member') + ' is finished at ' + (a.place ? a.place.split(',')[0] : 'the clinic') + ' and ready to come home. Thank you!'; }
 function skipText(state, a) { return 'CareBridge: no ' + (a.reason || 'visit') + ' on ' + fmtDay(a.start, 'en') + ' this week, so no ride is needed. Thank you!'; }
 /* Text request ids carry the ride: "<visit>" for the ride there, "<visit>|back" for the ride home. */
@@ -814,7 +793,8 @@ async function pushSchedule(state) {
 /* ---------- Sample family for demos ---------- */
 function sampleFamily() {
   return [
-    { id: 'p-avi', name: 'Avi', relation: 'Daughter', days: [1, 2, 4], times: ['am'], phone: '' },
+    // Avi is Purna Ji's granddaughter: 16, just started driving, free after school and on Saturdays.
+    { id: 'p-avi', name: 'Avi', relation: 'Granddaughter', days: [1, 2, 3, 4, 5, 6], times: ['pm'], phone: '' },
     { id: 'p-mini', name: 'Mini', relation: 'Daughter', days: [3, 5, 6], times: ['am', 'pm'], phone: '' },
     { id: 'p-abhishek', name: 'Abhishek', relation: 'Son', days: [6, 0], times: ['am', 'pm'], phone: '' },
     { id: 'p-krish', name: 'Krish', relation: 'Grandson', days: [1, 2, 3, 4, 5], times: ['pm'], phone: '' }

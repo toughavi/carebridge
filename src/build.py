@@ -1,6 +1,5 @@
-"""Builds CareBridge into one HTML file.
-   index.html                    -> the website (Vercel): real Epic sign-in, server features, installable app
-   build/carebridge-claude.html  -> body-only version for publishing as a claude.ai link"""
+"""Builds CareBridge into one file, index.html, by pasting the text, logic, screens and styles together.
+   Run it after changing anything in src/:  python3 src/build.py"""
 import pathlib
 src = pathlib.Path(__file__).parent
 root = src.parent
@@ -11,7 +10,6 @@ libs = '''<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/r
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js"></script>'''
 body = f'''<title>CareBridge</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="CareBridge helps seniors book doctor visits by voice in their own language and get rides from family without having to ask.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,8 +24,6 @@ body = f'''<title>CareBridge</title>
 {js}
 </script>
 '''
-(root/'build').mkdir(exist_ok=True)
-(root/'build'/'carebridge-claude.html').write_text(body, encoding='utf-8')
 full = f'''<!doctype html>
 <html lang="en">
 <head>

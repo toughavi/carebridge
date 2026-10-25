@@ -292,3 +292,15 @@ const WEEKLY_STRINGS = {
   }
 };
 for (const k in WEEKLY_STRINGS) Object.assign(STRINGS[k], WEEKLY_STRINGS[k]);
+
+/* v4 — a thank-you recorded in the senior's own voice. */
+const VOICE_STRINGS = {
+  en: { recThanks: 'Record a thank-you in your voice', recording: 'Recording… {s}s', recStop: 'Stop', recAgain: 'Record again', recSend: 'Send to {name}', recSent: 'Your voice is on its way to {name}', recNoMic: 'The microphone is not available. You can send the written thank-you instead.', voiceMsg: 'Voice thank-you' },
+  zh: { recThanks: '用您的声音录一句感谢', recording: '正在录音… {s}秒', recStop: '停止', recAgain: '重新录', recSend: '发给{name}', recSent: '您的声音正在发给{name}', recNoMic: '麦克风用不了。您可以发送文字感谢。', voiceMsg: '语音感谢' },
+  hi: { recThanks: 'अपनी आवाज़ में शुक्रिया रिकॉर्ड करें', recording: 'रिकॉर्ड हो रहा है… {s} सेकंड', recStop: 'रोकें', recAgain: 'फिर से रिकॉर्ड करें', recSend: '{name} को भेजें', recSent: 'आपकी आवाज़ {name} के पास जा रही है', recNoMic: 'माइक्रोफ़ोन उपलब्ध नहीं है। आप लिखा हुआ शुक्रिया भेज सकती हैं।', voiceMsg: 'आवाज़ में शुक्रिया' },
+  ta: { recThanks: 'உங்கள் குரலில் நன்றி பதிவு செய்யுங்கள்', recording: 'பதிவாகிறது… {s} வினாடி', recStop: 'நிறுத்து', recAgain: 'மீண்டும் பதிவு செய்', recSend: '{name}-க்கு அனுப்பு', recSent: 'உங்கள் குரல் {name}-க்குச் செல்கிறது', recNoMic: 'மைக்ரோஃபோன் கிடைக்கவில்லை. எழுத்து நன்றியை அனுப்பலாம்.', voiceMsg: 'குரல் நன்றி' },
+  pa: { recThanks: 'ਆਪਣੀ ਆਵਾਜ਼ ਵਿੱਚ ਧੰਨਵਾਦ ਰਿਕਾਰਡ ਕਰੋ', recording: 'ਰਿਕਾਰਡ ਹੋ ਰਿਹਾ ਹੈ… {s} ਸਕਿੰਟ', recStop: 'ਰੋਕੋ', recAgain: 'ਦੁਬਾਰਾ ਰਿਕਾਰਡ ਕਰੋ', recSend: '{name} ਨੂੰ ਭੇਜੋ', recSent: 'ਤੁਹਾਡੀ ਆਵਾਜ਼ {name} ਕੋਲ ਜਾ ਰਹੀ ਹੈ', recNoMic: 'ਮਾਈਕ੍ਰੋਫ਼ੋਨ ਉਪਲਬਧ ਨਹੀਂ ਹੈ। ਤੁਸੀਂ ਲਿਖਿਆ ਧੰਨਵਾਦ ਭੇਜ ਸਕਦੇ ਹੋ।', voiceMsg: 'ਆਵਾਜ਼ ਵਿੱਚ ਧੰਨਵਾਦ' },
+  es: { recThanks: 'Grabe un agradecimiento con su voz', recording: 'Grabando… {s} s', recStop: 'Detener', recAgain: 'Grabar de nuevo', recSend: 'Enviar a {name}', recSent: 'Su voz va en camino a {name}', recNoMic: 'El micrófono no está disponible. Puede enviar el agradecimiento escrito.', voiceMsg: 'Agradecimiento de voz' },
+  vi: { recThanks: 'Ghi âm lời cảm ơn bằng giọng của bác', recording: 'Đang ghi âm… {s} giây', recStop: 'Dừng', recAgain: 'Ghi lại', recSend: 'Gửi cho {name}', recSent: 'Giọng nói của bác đang được gửi đến {name}', recNoMic: 'Không dùng được micrô. Bác có thể gửi lời cảm ơn bằng chữ.', voiceMsg: 'Lời cảm ơn bằng giọng nói' }
+};
+for (const k in VOICE_STRINGS) Object.assign(STRINGS[k], VOICE_STRINGS[k]);
